@@ -68,8 +68,8 @@ ENV APPLICATION_ENV="production" \
 
 # Entrypoint and default command
 ENTRYPOINT ["dockerize",\
-    "-wait","tcp://dokku-mariadb-azuracast:3306",\
-    "-wait","tcp://dokku-influxdb:8086",\
-    "-wait","tcp://dokku-redis-redis:6379",\
+    "-wait","tcp://localhost:3306",\
+    "-wait","tcp://localhost:8086",\
+    "-wait","tcp://localhost:6379",\
     "-timeout","90s"]
 CMD ["/usr/local/bin/my_init"]
