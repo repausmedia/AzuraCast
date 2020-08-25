@@ -35,6 +35,11 @@ return [
             'name' => __('Twitter Post'),
             'description' => __('Automatically send a tweet.'),
         ],
+        Connector\Slack::NAME => [
+            'class' => Connector\Slack::class,
+            'name' => __('Slack Post'),
+            'description' => __('Automatically send a Slack message.'),
+        ],
     ],
 
     // The triggers that can be selected for a web hook to trigger.
