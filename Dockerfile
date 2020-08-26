@@ -57,7 +57,7 @@ ENV VIRTUAL_HOST="azuracast.local" \
 # Sensible default environment variables.
 ENV APPLICATION_ENV="production" \
     ENABLE_ADVANCED_FEATURES="false" \
-    MYSQL_HOST="dokku-mariadb-azuracast" \
+    MYSQL_HOST="localhost" \
     MYSQL_PORT=3306 \
     MYSQL_USER="azuracast" \
     MYSQL_PASSWORD="azur4c457" \
@@ -66,10 +66,5 @@ ENV APPLICATION_ENV="production" \
     COMPOSER_PLUGIN_MODE="false" \
     ADDITIONAL_MEDIA_SYNC_WORKER_COUNT=1
 
-# Entrypoint and default command
-ENTRYPOINT ["dockerize",\
-    "-wait","tcp://localhost:3306",\
-    "-wait","tcp://localhost:8086",\
-    "-wait","tcp://localhost:6379",\
-    "-timeout","90s"]
+# Default command
 CMD ["/usr/local/bin/my_init"]
