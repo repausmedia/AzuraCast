@@ -1,0 +1,56 @@
+version: '3'
+
+services:
+  # Use Dokku to manage NGINX proxy
+  # Use Dokku to manage Redis caching
+  # Use Dokku to manage MariaDB database
+  # Use Dokku to manage InfluxDB database
+
+  web:
+    container_name: azuracast_web
+    image: "azuracast/azuracast_web_v2:${AZURACAST_VERSION:-latest}"
+    depends_on:
+      - stations
+    env_file: azuracast.env
+    environment:
+      LANG: ${LANG:-en_US.UTF-8}
+      AZURACAST_DC_REVISION: 10
+      AZURACAST_VERSION: ${AZURACAST_VERSION:-latest}
+      AZURACAST_SFTP_PORT: ${AZURACAST_SFTP_PORT:-2022}
+      VIRTUAL_HOST: ${LETSENCRYPT_HOST:-azuracast.local}
+      LETSENCRYPT_HOST: ${LETSENCRYPT_HOST}
+      LETSENCRYPT_EMAIL: ${LETSENCRYPT_EMAIL}
+    ports:
+      - '${AZURACAST_SFTP_PORT:-2022}:2022'
+    # networks: managed by dokku
+    # volumes: managed by dokku
+    restart: always
+    ulimits: &default-ulimits
+      nofile:
+        soft: 65536
+        hard: 65536
+    logging: &default-logging
+      options:
+        max-size: "1m"
+        max-file: "5"
+
+  stations:
+    container_name: azuracast_stations
+    image: "azuracast/azuracast_radio:${AZURACAST_VERSION:-latest}"
+    ports:
+      - 8000:8000  # host:docker
+      - 8005:8005  # host:docker
+      - 8006:8006  # host:docker
+      - 8010:8010  # host:docker
+      - 8015:8015  # host:docker
+      - 8016:8016  # host:docker
+      - 8020:8020  # host:docker
+      - 8025:8025  # host:docker
+      - 8026:8026  # host:docker
+      - 8030:8030  # host:docker
+    # networks: managed by dokku
+    # volumes: managed by dokku
+    init: true
+    restart: always
+    ulimits: *default-ulimits
+    logging: *default-logging
