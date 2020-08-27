@@ -284,12 +284,12 @@ install() {
 
     if [[ ! -f .env ]]; then
         echo "Writing default .env file..."
-        curl -fsSL https://raw.githubusercontent.com/AzuraCast/AzuraCast/master/sample.env -o .env
+        curl -fsSL https://raw.githubusercontent.com/repausmedia/AzuraCast/master/sample.env -o .env
     fi
 
     if [[ ! -f azuracast.env ]]; then
         echo "Creating default AzuraCast settings file..."
-        curl -fsSL https://raw.githubusercontent.com/AzuraCast/AzuraCast/master/azuracast.sample.env -o azuracast.env
+        curl -fsSL https://raw.githubusercontent.com/repausmedia/AzuraCast/master/azuracast.sample.env -o azuracast.env
 
         # Generate a random password and replace the MariaDB password with it.
         NEW_PASSWORD=$(
@@ -301,7 +301,7 @@ install() {
 
     if [[ ! -f docker-compose.yml ]]; then
         echo "Retrieving default docker-compose.yml file..."
-        curl -fsSL https://raw.githubusercontent.com/AzuraCast/AzuraCast/master/docker-compose.sample.yml -o docker-compose.yml
+        curl -fsSL https://raw.githubusercontent.com/repausmedia/AzuraCast/master/docker-compose.sample.yml -o docker-compose.yml
     fi
 
     setup-release
@@ -327,7 +327,7 @@ install() {
 update() {
     if ask "Please make sure your AzuraCast installation is backed up before updating. Continue?" Y; then
         # Check for a new Docker Utility Script.
-        curl -fsSL https://raw.githubusercontent.com/AzuraCast/AzuraCast/master/docker.sh -o docker.new.sh
+        curl -fsSL https://raw.githubusercontent.com/repausmedia/AzuraCast/master/docker.sh -o docker.new.sh
 
         UTILITY_FILES_MATCH="$(
             cmp --silent docker.sh docker.new.sh
@@ -353,7 +353,7 @@ update() {
         fi
 
         if [[ ! -f azuracast.env ]]; then
-            curl -fsSL https://raw.githubusercontent.com/AzuraCast/AzuraCast/master/azuracast.sample.env -o azuracast.env
+            curl -fsSL https://raw.githubusercontent.com/repausmedia/AzuraCast/master/azuracast.sample.env -o azuracast.env
             echo "Default environment file loaded."
         fi
 
@@ -368,7 +368,7 @@ update() {
         .env --file azuracast.env set PREFER_RELEASE_BUILDS
 
         # Check for updated Docker Compose config.
-        curl -fsSL https://raw.githubusercontent.com/AzuraCast/AzuraCast/master/docker-compose.sample.yml -o docker-compose.new.yml
+        curl -fsSL https://raw.githubusercontent.com/repausmedia/AzuraCast/master/docker-compose.sample.yml -o docker-compose.new.yml
 
         COMPOSE_FILES_MATCH="$(
             cmp --silent docker-compose.yml docker-compose.new.yml
@@ -413,7 +413,7 @@ update() {
 # Usage: ./docker.sh update-self
 #
 update-self() {
-    curl -fsSL https://raw.githubusercontent.com/AzuraCast/AzuraCast/master/docker.sh -o docker.sh
+    curl -fsSL https://raw.githubusercontent.com/repausmedia/AzuraCast/master/docker.sh -o docker.sh
     chmod a+x docker.sh
 
     echo "New Docker utility script downloaded."
