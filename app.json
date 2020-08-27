@@ -35,23 +35,23 @@
         "app": "/var/azuracast/www_tmp"
       },
       {
-        "host": "/var/lib/dokku/data/storage/$APP/stations",
+        "host": "/var/lib/dokku/data/storage/azuracast/stations",
         "app": "/var/azuracast/stations"
       },
       {
-        "host": "/var/lib/dokku/data/storage/$APP/shoutcast2",
+        "host": "/var/lib/dokku/data/storage/azuracast/shoutcast2",
         "app": "/var/azuracast/servers/shoutcast2"
       },
       {
-        "host": "/var/lib/dokku/data/storage/$APP/geolite",
+        "host": "/var/lib/dokku/data/storage/azuracast/geolite",
         "app": "/var/azuracast/geoip"
       },
       {
-        "host": "/var/lib/dokku/data/storage/$APP/sftpgo",
+        "host": "/var/lib/dokku/data/storage/azuracast/sftpgo",
         "app": "/var/azuracast/sftpgo/persist"
       },
       {
-        "host": "/var/lib/dokku/data/storage/$APP/backups",
+        "host": "/var/lib/dokku/data/storage/azuracast/backups",
         "app": "/var/azuracast/backups"
       }
     ]
