@@ -5,7 +5,9 @@ use App\ApiUtilities;
 use App\Doctrine\Repository;
 use App\Entity;
 use App\Settings;
+use Carbon\CarbonImmutable;
 use Carbon\CarbonInterface;
+use DateTimeInterface;
 use Doctrine\ORM\EntityManagerInterface;
 use Psr\Http\Message\UriInterface;
 use Psr\Log\LoggerInterface;
@@ -49,11 +51,10 @@ class SongHistoryRepository extends Repository
             return [];
         }
 
-        $history = $this->em->createQuery(/** @lang DQL */ 'SELECT sh, s 
-            FROM App\Entity\SongHistory sh 
-            JOIN sh.song s 
-            LEFT JOIN sh.media sm  
-            WHERE sh.station_id = :station_id 
+        $history = $this->em->createQuery(/** @lang DQL */ 'SELECT sh
+            FROM App\Entity\SongHistory sh
+            LEFT JOIN sh.media sm
+            WHERE sh.station_id = :station_id
             AND sh.timestamp_end != 0
             ORDER BY sh.id DESC')
             ->setParameter('station_id', $station->getId())
@@ -76,16 +77,16 @@ class SongHistoryRepository extends Repository
         CarbonInterface $now,
         int $rows
     ): array {
-        $recentlyPlayed = $this->em->createQuery(/** @lang DQL */ 'SELECT sq, s
-            FROM App\Entity\StationQueue sq JOIN sq.song s
+        $recentlyPlayed = $this->em->createQuery(/** @lang DQL */ 'SELECT sq
+            FROM App\Entity\StationQueue sq
             WHERE sq.station = :station
             ORDER BY sq.timestamp_cued DESC')
             ->setParameter('station', $station)
             ->setMaxResults($rows)
             ->getArrayResult();
 
-        $recentHistory = $this->em->createQuery(/** @lang DQL */ 'SELECT sh, s 
-            FROM App\Entity\SongHistory sh JOIN sh.song s  
+        $recentHistory = $this->em->createQuery(/** @lang DQL */ 'SELECT sh
+            FROM App\Entity\SongHistory sh
             WHERE sh.station = :station
             AND (sh.timestamp_start != 0 AND sh.timestamp_start IS NOT NULL)
             AND sh.timestamp_start >= :threshold
@@ -99,8 +100,38 @@ class SongHistoryRepository extends Repository
         return array_slice($recentlyPlayed, 0, $rows);
     }
 
+    public function getRecentlyPlayedByTimeRange(
+        Entity\Station $station,
+        CarbonInterface $now,
+        int $minutes
+    ): array {
+        $timeRangeInSeconds = $minutes * 60;
+        $threshold = $now->getTimestamp() - $timeRangeInSeconds;
+
+        $recentlyPlayed = $this->em->createQuery(/** @lang DQL */ 'SELECT sq
+            FROM App\Entity\StationQueue sq
+            WHERE sq.station = :station
+            AND sq.timestamp_cued >= :threshold
+            ORDER BY sq.timestamp_cued DESC')
+            ->setParameter('station', $station)
+            ->setParameter('threshold', $threshold)
+            ->getArrayResult();
+
+        $recentHistory = $this->em->createQuery(/** @lang DQL */ 'SELECT sh
+            FROM App\Entity\SongHistory sh
+            WHERE sh.station = :station
+            AND (sh.timestamp_start != 0 AND sh.timestamp_start IS NOT NULL)
+            AND sh.timestamp_start >= :threshold
+            ORDER BY sh.timestamp_start DESC')
+            ->setParameter('station', $station)
+            ->setParameter('threshold', $threshold)
+            ->getArrayResult();
+
+        return array_merge($recentlyPlayed, $recentHistory);
+    }
+
     public function register(
-        Entity\Song $song,
+        Entity\SongInterface $song,
         Entity\Station $station,
         Entity\Api\NowPlaying $np
     ): Entity\SongHistory {
@@ -110,7 +141,7 @@ class SongHistoryRepository extends Repository
         $listeners = (int)$np->listeners->current;
 
         if ($last_sh instanceof Entity\SongHistory) {
-            if ($last_sh->getSong() === $song) {
+            if ($last_sh->getSongId() === $song->getSongId()) {
                 // Updating the existing SongHistory item with a new data point.
                 $last_sh->addDeltaPoint($listeners);
 
@@ -167,7 +198,7 @@ class SongHistoryRepository extends Repository
             $this->em->remove($sq);
         } else {
             // Processing a new SongHistory item.
-            $sh = new Entity\SongHistory($song, $station);
+            $sh = new Entity\SongHistory($station, $song);
 
             $currentStreamer = $station->getCurrentStreamer();
             if ($currentStreamer instanceof Entity\StationStreamer) {
@@ -187,7 +218,7 @@ class SongHistoryRepository extends Repository
 
     public function getCurrent(Entity\Station $station): ?Entity\SongHistory
     {
-        return $this->em->createQuery(/** @lang DQL */ 'SELECT sh 
+        return $this->em->createQuery(/** @lang DQL */ 'SELECT sh
             FROM App\Entity\SongHistory sh
             WHERE sh.station = :station
             AND sh.timestamp_start != 0
@@ -196,5 +227,53 @@ class SongHistoryRepository extends Repository
             ->setParameter('station', $station)
             ->setMaxResults(1)
             ->getOneOrNullResult();
+    }
+
+    /**
+     * @param Entity\Station $station
+     * @param int|DateTimeInterface $start
+     * @param int|DateTimeInterface $end
+     *
+     * @return array [$minimumListeners, $maximumListeners, $averageListeners]
+     */
+    public function getStatsByTimeRange(Entity\Station $station, $start, $end): array
+    {
+        if ($start instanceof DateTimeInterface) {
+            $start = $start->getTimestamp();
+        }
+        if ($end instanceof DateTimeInterface) {
+            $end = $end->getTimestamp();
+        }
+
+        $historyTotals = $this->em->createQuery(/** @lang DQL */ '
+            SELECT AVG(sh.listeners_end) AS listeners_avg, MAX(sh.listeners_end) AS listeners_max, MIN(sh.listeners_end) AS listeners_min
+            FROM App\Entity\SongHistory sh
+            WHERE sh.station = :station
+            AND sh.timestamp_end >= :start
+            AND sh.timestamp_start <= :end')
+            ->setParameter('station', $station)
+            ->setParameter('start', $start)
+            ->setParameter('end', $end)
+            ->getSingleResult();
+
+        $min = (int)$historyTotals['listeners_min'];
+        $max = (int)$historyTotals['listeners_max'];
+        $avg = round((float)$historyTotals['listeners_avg'], 2);
+
+        return [$min, $max, $avg];
+    }
+
+    public function cleanup(int $daysToKeep): void
+    {
+        $threshold = CarbonImmutable::now()
+            ->subDays($daysToKeep)
+            ->getTimestamp();
+
+        $this->em->createQuery(/** @lang DQL */ 'DELETE 
+                FROM App\Entity\SongHistory sh 
+                WHERE sh.timestamp_start != 0 
+                AND sh.timestamp_start <= :threshold')
+            ->setParameter('threshold', $threshold)
+            ->execute();
     }
 }

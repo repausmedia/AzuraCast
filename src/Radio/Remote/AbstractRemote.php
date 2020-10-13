@@ -52,9 +52,10 @@ abstract class AbstractRemote
 
         $npAdapter = $this->adapterFactory->getAdapter(
             $adapterType,
-            $remote->getUrl(),
-            $remote->getAdminPassword()
+            $remote->getUrl()
         );
+
+        $npAdapter->setAdminPassword($remote->getAdminPassword());
 
         try {
             $npRemote = $npAdapter->getNowPlaying($remote->getMount(), $includeClients);
@@ -96,7 +97,7 @@ abstract class AbstractRemote
      * Format and return a URL for the remote path.
      *
      * @param Entity\StationRemote $remote
-     * @param null $custom_path
+     * @param string|null $custom_path
      *
      * @return string
      */
@@ -104,7 +105,7 @@ abstract class AbstractRemote
     {
         $uri = new Uri($remote->getUrl());
 
-        return ($custom_path !== null)
+        return (null !== $custom_path)
             ? (string)$uri->withPath($custom_path)
             : (string)$uri;
     }

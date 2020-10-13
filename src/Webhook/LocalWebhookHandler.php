@@ -1,44 +1,38 @@
 <?php
-namespace App\Webhook\Connector;
+namespace App\Webhook;
 
 use App\Entity;
 use App\Event\SendWebhooks;
 use App\Service\NChan;
 use App\Settings;
 use GuzzleHttp\Client;
-use InfluxDB\Database;
-use InfluxDB\Point;
 use Monolog\Logger;
 use Psr\SimpleCache\CacheInterface;
 use RuntimeException;
 use const JSON_PRETTY_PRINT;
 
-class Local
+class LocalWebhookHandler
 {
     public const NAME = 'local';
 
-    protected Client $http_client;
+    protected Client $httpClient;
 
     protected Logger $logger;
 
-    protected Database $influx;
-
     protected CacheInterface $cache;
 
-    protected Entity\Repository\SettingsRepository $settings_repo;
+    protected Entity\Repository\SettingsRepository $settingsRepo;
 
     public function __construct(
         Logger $logger,
-        Client $http_client,
-        Database $influx,
+        Client $httpClient,
         CacheInterface $cache,
-        Entity\Repository\SettingsRepository $settings_repo
+        Entity\Repository\SettingsRepository $settingsRepo
     ) {
         $this->logger = $logger;
-        $this->http_client = $http_client;
-        $this->influx = $influx;
+        $this->httpClient = $httpClient;
         $this->cache = $cache;
-        $this->settings_repo = $settings_repo;
+        $this->settingsRepo = $settingsRepo;
     }
 
     public function dispatch(SendWebhooks $event): void
@@ -47,19 +41,6 @@ class Local
         $station = $event->getStation();
 
         if ($event->isStandalone()) {
-            $this->logger->debug('Writing entry to InfluxDB...');
-
-            // Post statistics to InfluxDB.
-            $influx_point = new Point(
-                'station.' . $station->getId() . '.listeners',
-                (int)$np->listeners->current,
-                [],
-                ['station' => $station->getId()],
-                time()
-            );
-
-            $this->influx->writePoints([$influx_point], Database::PRECISION_SECONDS);
-
             // Replace the relevant station information in the cache and database.
             $this->logger->debug('Updating NowPlaying cache...');
 
@@ -77,7 +58,7 @@ class Local
                 }
 
                 $this->cache->set('api_nowplaying_data', $np_new, 120);
-                $this->settings_repo->setSetting('nowplaying', $np_new);
+                $this->settingsRepo->setSetting('nowplaying', $np_new);
             }
         }
 
@@ -118,7 +99,7 @@ class Local
         if (NChan::isSupported()) {
             $this->logger->debug('Dispatching Nchan notification...');
 
-            $this->http_client->post('http://localhost:9010/pub/' . urlencode($station->getShortName()), [
+            $this->httpClient->post('http://localhost:9010/pub/' . urlencode($station->getShortName()), [
                 'json' => $np,
             ]);
         }

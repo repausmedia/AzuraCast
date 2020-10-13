@@ -51,13 +51,12 @@ services:
       - '${AZURACAST_SFTP_PORT:-2022}:2022'
     depends_on:
       - mariadb
-      - influxdb
       - stations
       - redis
     env_file: azuracast.env
     environment:
       LANG: ${LANG:-en_US.UTF-8}
-      AZURACAST_DC_REVISION: 10
+      AZURACAST_DC_REVISION: 11
       AZURACAST_VERSION: ${AZURACAST_VERSION:-latest}
       AZURACAST_SFTP_PORT: ${AZURACAST_SFTP_PORT:-2022}
       VIRTUAL_HOST: ${LETSENCRYPT_HOST:-azuracast.local}
@@ -65,6 +64,7 @@ services:
       LETSENCRYPT_EMAIL: ${LETSENCRYPT_EMAIL}
     volumes:
       - letsencrypt:/etc/nginx/certs:ro
+      - www_vendor:/var/azuracast/www/vendor
       - tmp_data:/var/azuracast/www_tmp
       - station_data:/var/azuracast/stations
       - shoutcast2_install:/var/azuracast/servers/shoutcast2
@@ -89,15 +89,6 @@ services:
     volumes:
       - db_data:/var/lib/mysql
     env_file: azuracast.env
-    networks:
-      - backend
-    restart: always
-    logging: *default-logging
-
-  influxdb:
-    image: "azuracast/azuracast_influxdb:${AZURACAST_VERSION:-latest}"
-    volumes:
-      - influx_data:/var/lib/influxdb
     networks:
       - backend
     restart: always
@@ -289,15 +280,15 @@ networks:
     driver: bridge
 
 volumes:
-  nginx_proxy_vhosts: {}
-  db_data: {}
-  influx_data: {}
-  letsencrypt: {}
-  letsencrypt_html: {}
-  shoutcast2_install: {}
-  geolite_install: {}
-  sftpgo_data: {}
-  station_data: {}
-  tmp_data: {}
-  redis_data: {}
-  backups: {}
+  nginx_proxy_vhosts: { }
+  db_data: { }
+  letsencrypt: { }
+  letsencrypt_html: { }
+  shoutcast2_install: { }
+  geolite_install: { }
+  sftpgo_data: { }
+  station_data: { }
+  www_vendor: { }
+  tmp_data: { }
+  redis_data: { }
+  backups: { }

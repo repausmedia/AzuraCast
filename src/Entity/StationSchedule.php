@@ -6,6 +6,7 @@ use Carbon\CarbonImmutable;
 use Carbon\CarbonInterface;
 use DateTimeZone;
 use Doctrine\ORM\Mapping as ORM;
+use InvalidArgumentException;
 use OpenApi\Annotations as OA;
 
 /**
@@ -83,7 +84,7 @@ class StationSchedule
      *
      * @OA\Property(example="0,1,2,3")
      *
-     * @var string
+     * @var string Array of ISO-8601 days (1 for Monday, 7 for Sunday)
      */
     protected $days;
 
@@ -97,7 +98,7 @@ class StationSchedule
         } elseif ($relation instanceof StationStreamer) {
             $this->streamer = $relation;
         } else {
-            throw new \InvalidArgumentException('Schedule must be created with either a playlist or a streamer.');
+            throw new InvalidArgumentException('Schedule must be created with either a playlist or a streamer.');
         }
     }
 
@@ -235,7 +236,7 @@ class StationSchedule
 
             $parts[] = implode('/', $displayDays);
         }
-        
+
         return implode(', ', $parts);
     }
 
@@ -254,7 +255,7 @@ class StationSchedule
         }
 
         $timeCode = str_pad($timeCode, 4, '0', STR_PAD_LEFT);
-        return $now->setTime(substr($timeCode, 0, 2), substr($timeCode, 2));
+        return $now->setTime((int)substr($timeCode, 0, 2), (int)substr($timeCode, 2));
     }
 
     public static function displayTimeCode($timeCode): string

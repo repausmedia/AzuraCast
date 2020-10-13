@@ -1,10 +1,11 @@
 <?php
+
 class D00_Api_IndexCest extends CestAbstract
 {
     /**
      * @before setupComplete
      */
-    public function checkApiIndex(FunctionalTester $I)
+    public function checkApiIndex(FunctionalTester $I): void
     {
         $I->wantTo('Check basic API functions.');
 
@@ -14,8 +15,6 @@ class D00_Api_IndexCest extends CestAbstract
         ]);
 
         $I->sendGET('/api/time');
-        $I->seeResponseContainsJson([
-            'gmt_timezone' => 'GMT',
-        ]);
+        $I->seeResponseCodeIs(200);
     }
 }

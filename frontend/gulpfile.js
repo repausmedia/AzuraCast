@@ -7,7 +7,7 @@ const rev = require('gulp-rev');
 const concat = require('gulp-concat');
 const uglify = require('gulp-uglify');
 const sourcemaps = require('gulp-sourcemaps');
-const sass = require('gulp-sass');
+const sass = require('gulp-dart-sass');
 const clean_css = require('gulp-clean-css');
 const revdel = require('gulp-rev-delete-original');
 const webpackStream = require('webpack-stream');
@@ -48,10 +48,10 @@ var jsFiles = {
       'node_modules/bootstrap-notify/bootstrap-notify.min.js'
     ]
   },
-  'sweetalert': {
-    base: 'node_modules/sweetalert/dist',
+  'sweetalert2': {
+    base: 'node_modules/sweetalert2/dist',
     files: [
-      'node_modules/sweetalert/dist/sweetalert.min.js'
+      'node_modules/sweetalert2/dist/sweetalert2.min.js'
     ]
   },
   'autosize': {

@@ -57,9 +57,9 @@ class SHOUTcast extends AbstractFrontend
 
         $npAdapter = $this->adapterFactory->getAdapter(
             AdapterFactory::ADAPTER_SHOUTCAST2,
-            $baseUrl,
-            $feConfig->getAdminPassword()
+            $baseUrl
         );
+        $npAdapter->setAdminPassword($feConfig->getAdminPassword());
 
         $defaultResult = Result::blank();
         $otherResults = [];
@@ -70,7 +70,7 @@ class SHOUTcast extends AbstractFrontend
                 /** @var Entity\StationMount $mount */
                 $sid++;
 
-                $result = $npAdapter->getNowPlaying($sid, $includeClients);
+                $result = $npAdapter->getNowPlaying((string)$sid, $includeClients);
 
                 $mount->setListenersTotal($result->listeners->total);
                 $mount->setListenersUnique($result->listeners->unique);

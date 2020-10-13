@@ -1,11 +1,12 @@
 <?php
-namespace App\Console\Command;
+namespace App\Console\Command\Backup;
 
+use App\Console\Command\CommandAbstract;
+use App\Console\Command\Traits;
 use App\Entity;
 use App\Sync\Task\Backup;
 use App\Utilities;
 use Doctrine\ORM\EntityManagerInterface;
-use InfluxDB\Database;
 use Symfony\Component\Console\Style\SymfonyStyle;
 use const PATHINFO_EXTENSION;
 
@@ -16,7 +17,6 @@ class BackupCommand extends CommandAbstract
     public function __invoke(
         SymfonyStyle $io,
         EntityManagerInterface $em,
-        Database $influxdb,
         ?string $path = '',
         bool $excludeMedia = false
     ) {
@@ -44,12 +44,6 @@ class BackupCommand extends CommandAbstract
             return 1;
         }
 
-        $tmp_dir_influxdb = '/tmp/azuracast_backup_influxdb';
-        if (!mkdir($tmp_dir_influxdb) && !is_dir($tmp_dir_influxdb)) {
-            $io->error(__('Directory "%s" was not created', $tmp_dir_influxdb));
-            return 1;
-        }
-
         $io->newLine();
 
         // Back up MariaDB
@@ -74,25 +68,6 @@ class BackupCommand extends CommandAbstract
         );
 
         $files_to_backup[] = $path_db_dump;
-        $io->newLine();
-
-        // Back up InfluxDB
-        $io->section(__('Backing up InfluxDB...'));
-
-        $influxdb_client = $influxdb->getClient();
-
-        $this->passThruProcess($io, [
-            'influxd',
-            'backup',
-            '-database',
-            'stations',
-            '-portable',
-            '-host',
-            $influxdb_client->getHost() . ':8088',
-            $tmp_dir_influxdb,
-        ], $tmp_dir_influxdb);
-
-        $files_to_backup[] = $tmp_dir_influxdb;
         $io->newLine();
 
         // Include station media if specified.
@@ -158,7 +133,6 @@ class BackupCommand extends CommandAbstract
         $io->section(__('Cleaning up temporary files...'));
 
         Utilities::rmdirRecursive($tmp_dir_mariadb);
-        Utilities::rmdirRecursive($tmp_dir_influxdb);
 
         $io->newLine();
 

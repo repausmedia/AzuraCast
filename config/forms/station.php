@@ -18,6 +18,30 @@ foreach ($backends as $adapter_nickname => $adapter_info) {
     $backend_types[$adapter_nickname] = $adapter_info['name'];
 }
 
+$tzSelect = [
+    'UTC' => [
+        'UTC' => 'UTC',
+    ],
+];
+
+foreach (DateTimeZone::listIdentifiers((DateTimeZone::ALL ^ DateTimeZone::ANTARCTICA ^ DateTimeZone::UTC)) as $tzIdentifier) {
+    $tz = new DateTimeZone($tzIdentifier);
+    $tzRegion = substr($tzIdentifier, 0, strpos($tzIdentifier, '/')) ?: $tzIdentifier;
+    $tzSubregion = str_replace([$tzRegion . '/', '_'], ['', ' '], $tzIdentifier) ?: $tzRegion;
+
+    $offset = $tz->getOffset(new DateTime);
+
+    $offsetPrefix = $offset < 0 ? '-' : '+';
+    $offsetFormatted = gmdate(($offset % 60 === 0) ? 'G' : 'G:i', abs($offset));
+
+    $prettyOffset = ($offset === 0) ? 'UTC' : 'UTC' . $offsetPrefix . $offsetFormatted;
+    if ($tzSubregion !== $tzRegion) {
+        $tzSubregion .= ' (' . $prettyOffset . ')';
+    }
+
+    $tzSelect[$tzRegion][$tzIdentifier] = $tzSubregion;
+}
+
 return [
     'method' => 'post',
     'enctype' => 'multipart/form-data',
@@ -74,8 +98,8 @@ return [
                     [
                         'label' => __('Time Zone'),
                         'description' => __('Scheduled playlists and other timed items will be controlled by this time zone.'),
-                        'options' => App\Timezone::fetchSelect(),
-                        'default' => App\Customization::DEFAULT_TIMEZONE,
+                        'options' => $tzSelect,
+                        'default' => 'UTC',
                         'form_group_class' => 'col-sm-12',
                     ],
                 ],
@@ -510,6 +534,19 @@ return [
                             'UTF-8' => 'UTF-8',
                             'ISO-8859-1' => 'ISO-8859-1',
                         ],
+                        'form_group_class' => 'col-md-6',
+                    ],
+                ],
+
+                StationBackendConfiguration::DUPLICATE_PREVENTION_TIME_RANGE => [
+                    'number',
+                    [
+                        'label' => __('Duplicate Prevention Time Range (Minutes)'),
+                        'description' => __('This specifies the time range (in minutes) of the song history that the duplicate song prevention algorithm should take into account.'),
+                        'belongsTo' => 'backend_config',
+                        'default' => StationBackendConfiguration::DEFAULT_DUPLICATE_PREVENTION_TIME_RANGE,
+                        'min' => '0',
+                        'max' => '1440',
                         'form_group_class' => 'col-md-6',
                     ],
                 ],

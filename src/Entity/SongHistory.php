@@ -12,9 +12,9 @@ use Psr\Http\Message\UriInterface;
  * })
  * @ORM\Entity()
  */
-class SongHistory
+class SongHistory implements SongInterface
 {
-    use Traits\TruncateInts;
+    use Traits\TruncateInts, Traits\HasSongFields;
 
     /** @var int The expected delay between when a song history record is registered and when listeners hear it. */
     public const PLAYBACK_DELAY_SECONDS = 5;
@@ -29,21 +29,6 @@ class SongHistory
      * @var int
      */
     protected $id;
-
-    /**
-     * @ORM\Column(name="song_id", type="string", length=50)
-     * @var string
-     */
-    protected $song_id;
-
-    /**
-     * @ORM\ManyToOne(targetEntity="Song", inversedBy="history")
-     * @ORM\JoinColumns({
-     *   @ORM\JoinColumn(name="song_id", referencedColumnName="id", onDelete="CASCADE")
-     * })
-     * @var Song
-     */
-    protected $song;
 
     /**
      * @ORM\Column(name="station_id", type="integer")
@@ -180,9 +165,12 @@ class SongHistory
      */
     protected $delta_points;
 
-    public function __construct(Song $song, Station $station)
-    {
-        $this->song = $song;
+    public function __construct(
+        Station $station,
+        SongInterface $song
+    ) {
+        $this->setSong($song);
+
         $this->station = $station;
 
         $this->timestamp_start = 0;
@@ -201,11 +189,6 @@ class SongHistory
     public function getId(): int
     {
         return $this->id;
-    }
-
-    public function getSong(): Song
-    {
-        return $this->song;
     }
 
     public function getStation(): Station
@@ -385,11 +368,13 @@ class SongHistory
     }
 
     /**
-     * @param Api\SongHistory $response
+     * @template T of Api\SongHistory
+     *
+     * @param T $response
      * @param ApiUtilities $api
      * @param UriInterface|null $base_url
      *
-     * @return Api\SongHistory
+     * @return T
      */
     public function api(Api\SongHistory $response, ApiUtilities $api, UriInterface $base_url = null)
     {
@@ -420,23 +405,28 @@ class SongHistory
             $response->delta_total = (int)$this->delta_total;
         }
 
-        $response->song = ($this->media)
-            ? $this->media->api($api, $base_url)
-            : $this->song->api($api, $this->station, $base_url);
+        if ($this->media) {
+            $response->song = $this->media->api($api, $base_url);
+        } else {
+            $song = new Song($this);
+            $response->song = $song->api($api, $this->station, $base_url);
+        }
 
         return $response;
     }
 
-    public function __toString()
+    public function __toString(): string
     {
-        return (null !== $this->media)
-            ? (string)$this->media
-            : (string)$this->song;
+        if ($this->media instanceof StationMedia) {
+            return (string)$this->media;
+        }
+
+        return (string)(new Song($this));
     }
 
     public static function fromQueue(StationQueue $queue): self
     {
-        $sh = new self($queue->getSong(), $queue->getStation());
+        $sh = new self($queue->getStation(), $queue);
         $sh->setMedia($queue->getMedia());
         $sh->setRequest($queue->getRequest());
         $sh->setPlaylist($queue->getPlaylist());

@@ -2,7 +2,6 @@
 namespace App\Entity;
 
 use App\Annotations\AuditLog;
-use App\Customization;
 use App\File;
 use App\Radio\Adapters;
 use App\Radio\Frontend\AbstractFrontend;
@@ -11,6 +10,7 @@ use App\Radio\Remote\AdapterProxy;
 use App\Settings;
 use App\Validator\Constraints as AppAssert;
 use Brick\Math\BigInteger;
+use DateTimeZone;
 use Doctrine\Common\Collections\ArrayCollection;
 use Doctrine\Common\Collections\Collection;
 use Doctrine\ORM\Mapping as ORM;
@@ -935,10 +935,7 @@ class Station
     public function getStorageUsed(): ?string
     {
         $raw_size = $this->getStorageUsedBytes();
-
-        return ($raw_size instanceof BigInteger)
-            ? Quota::getReadableSize($raw_size)
-            : '';
+        return Quota::getReadableSize($raw_size);
     }
 
     /**
@@ -1025,9 +1022,6 @@ class Station
         }
 
         $used = $this->getStorageUsedBytes();
-        if ($used === null) {
-            return false;
-        }
 
         return ($used->compareTo($available) !== -1);
     }
@@ -1043,12 +1037,12 @@ class Station
             return $this->timezone;
         }
 
-        return Customization::DEFAULT_TIMEZONE;
+        return 'UTC';
     }
 
-    public function getTimezoneObject(): \DateTimeZone
+    public function getTimezoneObject(): DateTimeZone
     {
-        return new \DateTimeZone($this->getTimezone());
+        return new DateTimeZone($this->getTimezone());
     }
 
     public function setTimezone(?string $timezone): void

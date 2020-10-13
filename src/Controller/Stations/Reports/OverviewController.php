@@ -6,7 +6,6 @@ use App\Http\Response;
 use App\Http\ServerRequest;
 use Carbon\CarbonImmutable;
 use Doctrine\ORM\EntityManagerInterface;
-use InfluxDB\Database;
 use Psr\Http\Message\ResponseInterface;
 use stdClass;
 use function array_reverse;
@@ -18,16 +17,16 @@ class OverviewController
 
     protected Entity\Repository\SettingsRepository $settingsRepo;
 
-    protected Database $influx;
+    protected Entity\Repository\AnalyticsRepository $analyticsRepo;
 
     public function __construct(
         EntityManagerInterface $em,
         Entity\Repository\SettingsRepository $settingsRepo,
-        Database $influx
+        Entity\Repository\AnalyticsRepository $analyticsRepo
     ) {
         $this->em = $em;
         $this->settingsRepo = $settingsRepo;
-        $this->influx = $influx;
+        $this->analyticsRepo = $analyticsRepo;
     }
 
     public function __invoke(ServerRequest $request, Response $response): ResponseInterface
@@ -45,13 +44,11 @@ class OverviewController
         }
 
         /* Statistics */
-        $statisticsThreshold = CarbonImmutable::parse('-1 month', $station_tz)->getTimestamp();
+        $statisticsThreshold = CarbonImmutable::parse('-1 month', $station_tz);
 
         // Statistics by day.
-        $resultset = $this->influx->query('SELECT * FROM "1d"."station.' . $station->getId() . '.listeners" WHERE time > now() - 30d',
-            [
-                'epoch' => 'ms',
-            ]);
+        $dailyStats = $this->analyticsRepo->findForStationAfterTime($station, $statisticsThreshold,
+            Entity\Analytics::INTERVAL_DAILY);
 
         $daily_chart = new stdClass;
         $daily_chart->label = __('Listeners by Day');
@@ -66,20 +63,22 @@ class OverviewController
 
         $days_of_week = [];
 
-        foreach ($resultset->getPoints() as $stat) {
+        foreach ($dailyStats as $stat) {
+            /** @var CarbonImmutable $statTime */
+            $statTime = $stat['moment'];
+            $statTime = $statTime->shiftTimezone($station_tz);
+
             $avg_row = new stdClass;
-            $avg_row->t = $stat['time'];
-            $avg_row->y = round($stat['value'], 2);
+            $avg_row->t = $statTime->getTimestamp() * 1000;
+            $avg_row->y = round($stat['number_avg'], 2);
             $daily_averages[] = $avg_row;
 
-            $dt = CarbonImmutable::createFromTimestamp($avg_row->t / 1000, $station_tz);
-
-            $row_date = $dt->format('Y-m-d');
+            $row_date = $statTime->format('Y-m-d');
             $daily_alt[] = '<dt><time data-original="' . $avg_row->t . '">' . $row_date . '</time></dt>';
             $daily_alt[] = '<dd>' . $avg_row->y . ' ' . __('Listeners') . '</dd>';
 
-            $day_of_week = (int)$dt->format('N') - 1;
-            $days_of_week[$day_of_week][] = $stat['value'];
+            $day_of_week = (int)$statTime->format('N') - 1;
+            $days_of_week[$day_of_week][] = $stat['number_avg'];
         }
 
         $daily_alt[] = '</dl>';
@@ -128,19 +127,18 @@ class OverviewController
         ];
 
         // Statistics by hour.
-        $resultset = $this->influx->query('SELECT * FROM "1h"."station.' . $station->getId() . '.listeners"', [
-            'epoch' => 'ms',
-        ]);
-
-        $hourly_stats = $resultset->getPoints();
+        $hourlyStats = $this->analyticsRepo->findForStationAfterTime($station, $statisticsThreshold,
+            Entity\Analytics::INTERVAL_HOURLY);
 
         $totals_by_hour = [];
 
-        foreach ($hourly_stats as $stat) {
-            $dt = CarbonImmutable::createFromTimestamp($stat['time'] / 1000, $station_tz);
+        foreach ($hourlyStats as $stat) {
+            /** @var CarbonImmutable $statTime */
+            $statTime = $stat['moment'];
+            $statTime = $statTime->shiftTimezone($station_tz);
 
-            $hour = (int)$dt->format('G');
-            $totals_by_hour[$hour][] = $stat['value'];
+            $hour = (int)$statTime->format('G');
+            $totals_by_hour[$hour][] = $stat['number_avg'];
         }
 
         $hourly_labels = [];
@@ -176,30 +174,21 @@ class OverviewController
 
         $song_totals_raw = [];
         $song_totals_raw['played'] = $this->em->createQuery(/** @lang DQL */ 'SELECT 
-            sh.song_id, COUNT(sh.id) AS records
+            sh.song_id, sh.text, sh.artist, sh.title, COUNT(sh.id) AS records
             FROM App\Entity\SongHistory sh
             WHERE sh.station_id = :station_id AND sh.timestamp_start >= :timestamp
             GROUP BY sh.song_id
             ORDER BY records DESC')
             ->setParameter('station_id', $station->getId())
-            ->setParameter('timestamp', $statisticsThreshold)
+            ->setParameter('timestamp', $statisticsThreshold->getTimestamp())
             ->setMaxResults(40)
             ->getArrayResult();
 
         // Compile the above data.
         $song_totals = [];
 
-        $get_song_q = $this->em->createQuery(/** @lang DQL */ 'SELECT s 
-            FROM App\Entity\Song s
-            WHERE s.id = :song_id');
-
         foreach ($song_totals_raw as $total_type => $total_records) {
             foreach ($total_records as $total_record) {
-                $song = $get_song_q->setParameter('song_id', $total_record['song_id'])
-                    ->getArrayResult();
-
-                $total_record['song'] = $song[0];
-
                 $song_totals[$total_type][] = $total_record;
             }
 
@@ -210,9 +199,8 @@ class OverviewController
         $songPerformanceThreshold = CarbonImmutable::parse('-2 days', $station_tz)->getTimestamp();
 
         // Get all songs played in timeline.
-        $songs_played_raw = $this->em->createQuery(/** @lang DQL */ 'SELECT sh, s
+        $songs_played_raw = $this->em->createQuery(/** @lang DQL */ 'SELECT sh
             FROM App\Entity\SongHistory sh
-            LEFT JOIN sh.song s
             WHERE sh.station_id = :station_id 
             AND sh.timestamp_start >= :timestamp 
             AND sh.listeners_start IS NOT NULL
@@ -241,11 +229,7 @@ class OverviewController
             $a = $a_arr['stat_delta'];
             $b = $b_arr['stat_delta'];
 
-            if ($a == $b) {
-                return 0;
-            }
-
-            return ($a > $b) ? 1 : -1;
+            return $a <=> $b;
         });
 
         return $request->getView()->renderToResponse($response, 'stations/reports/overview', [

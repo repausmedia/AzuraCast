@@ -13,7 +13,6 @@ __dotenv_cmd=.env
         .env."$@"
         return
     fi
-    .env --help >&2
     return 64
 }
 
@@ -111,38 +110,6 @@ __dotenv_cmd=.env
         ;;
     esac
 }
-.env.-h() { .env.--help "$@"; }
-.env.--help() {
-    echo "Usage:
-  $__dotenv_cmd [-f|--file FILE] COMMAND [ARGS...]
-  $__dotenv_cmd -h|--help
-
-Options:
-  -f, --file FILE          Use a file other than .env
-
-Read Commands:
-  get KEY                  Get raw value of KEY (or fail)
-  parse [KEY...]           Get trimmed KEY=VALUE lines for named keys (or all)
-  export [KEY...]          Export the named keys (or all) in shell format
-
-Write Commands:
-  set [+]KEY[=VALUE]...    Set or unset values (in-place w/.bak); + sets default
-  puts STRING              Append STRING to the end of the file
-  generate KEY [CMD...]    Set KEY to the output of CMD unless it already exists;
-                           return the new or existing value."
-}
-
-__dotenv() {
-    set -eu
-    __dotenv_cmd=${0##*/}
-    .env.export() {
-        .env.parse "$@" || return 0
-        printf 'export %q\n' "${REPLY[@]}"
-        REPLY=()
-    }
-    .env "$@" || return $?
-    ${REPLY[@]+printf '%s\n' "${REPLY[@]}"}
-}
 
 # This is a general-purpose function to ask Yes/No questions in Bash, either
 # with or without a default answer. It keeps repeating the question until it
@@ -185,6 +152,8 @@ ask() {
 
 # Generate a prompt to set an environment file value.
 envfile-set() {
+    local VALUE INPUT
+
     .env --file .env
 
     .env get "$1"
@@ -219,7 +188,7 @@ setup-letsencrypt() {
 # Configure release mode settings.
 #
 setup-release() {
-    AZURACAST_VERSION="latest"
+    local AZURACAST_VERSION="latest"
     if ask "Prefer stable release versions of AzuraCast?" N; then
         AZURACAST_VERSION="stable"
     fi
@@ -261,7 +230,7 @@ install() {
         echo "Docker Compose is already installed! Continuing..."
     else
         if ask "Docker Compose does not appear to be installed. Install Docker Compose now?" Y; then
-            COMPOSE_VERSION=1.25.3
+            local COMPOSE_VERSION=1.25.3
 
             if [[ $EUID -ne 0 ]]; then
                 if [[ ! $(command -v sudo) ]]; then
@@ -292,6 +261,7 @@ install() {
         curl -fsSL https://raw.githubusercontent.com/repausmedia/AzuraCast/master/azuracast.sample.env -o azuracast.env
 
         # Generate a random password and replace the MariaDB password with it.
+        local NEW_PASSWORD
         NEW_PASSWORD=$(
             tr </dev/urandom -dc _A-Z-a-z-0-9 | head -c"${1:-32}"
             echo
@@ -301,7 +271,15 @@ install() {
 
     if [[ ! -f docker-compose.yml ]]; then
         echo "Retrieving default docker-compose.yml file..."
-        curl -fsSL https://raw.githubusercontent.com/repausmedia/AzuraCast/master/docker-compose.sample.yml -o docker-compose.yml
+        .env --file .env get AZURACAST_VERSION
+        local AZURACAST_VERSION
+        AZURACAST_VERSION="${REPLY:-latest}"
+
+        if [[ $AZURACAST_VERSION == "stable" ]]; then
+            curl -fsSL https://raw.githubusercontent.com/repausmedia/AzuraCast/stable/docker-compose.sample.yml -o docker-compose.yml
+        else
+            curl -fsSL https://raw.githubusercontent.com/repausmedia/AzuraCast/master/docker-compose.sample.yml -o docker-compose.yml
+        fi
     fi
 
     setup-release
@@ -315,8 +293,8 @@ install() {
     fi
 
     docker-compose pull
+    docker-compose run --rm --user="azuracast" web azuracast_install "$@"
     docker-compose up -d
-    docker-compose exec --user="azuracast" web azuracast_install "$@"
     exit
 }
 
@@ -329,11 +307,12 @@ update() {
         # Check for a new Docker Utility Script.
         curl -fsSL https://raw.githubusercontent.com/repausmedia/AzuraCast/master/docker.sh -o docker.new.sh
 
+        local UTILITY_FILES_MATCH
         UTILITY_FILES_MATCH="$(
             cmp --silent docker.sh docker.new.sh
             echo $?
         )"
-        UPDATE_UTILITY=0
+        local UPDATE_UTILITY=0
 
         if [[ ${UTILITY_FILES_MATCH} -ne 0 ]]; then
             if ask "The Docker Utility Script has changed since your version. Update to latest version?" Y; then
@@ -359,6 +338,8 @@ update() {
 
         # Migrate previous release settings to new environment variable.
         .env --file azuracast.env get PREFER_RELEASE_BUILDS
+
+        local PREFER_RELEASE_BUILDS
         PREFER_RELEASE_BUILDS="${REPLY:-false}"
 
         if [[ $PREFER_RELEASE_BUILDS == "true" ]]; then
@@ -367,14 +348,24 @@ update() {
 
         .env --file azuracast.env set PREFER_RELEASE_BUILDS
 
-        # Check for updated Docker Compose config.
-        curl -fsSL https://raw.githubusercontent.com/repausmedia/AzuraCast/master/docker-compose.sample.yml -o docker-compose.new.yml
+        # Check for new Docker Compose file
+        .env --file .env get AZURACAST_VERSION
+        local AZURACAST_VERSION
+        AZURACAST_VERSION="${REPLY:-latest}"
 
+        if [[ $AZURACAST_VERSION == "stable" ]]; then
+            curl -fsSL https://raw.githubusercontent.com/repausmedia/AzuraCast/stable/docker-compose.sample.yml -o docker-compose.new.yml
+        else
+            curl -fsSL https://raw.githubusercontent.com/repausmedia/AzuraCast/master/docker-compose.sample.yml -o docker-compose.new.yml
+        fi
+
+        # Check for updated Docker Compose config.
+        local COMPOSE_FILES_MATCH
         COMPOSE_FILES_MATCH="$(
             cmp --silent docker-compose.yml docker-compose.new.yml
             echo $?
         )"
-        UPDATE_COMPOSE=0
+        local UPDATE_COMPOSE=0
 
         if [[ ${COMPOSE_FILES_MATCH} -ne 0 ]]; then
             if ask "The docker-compose.yml file has changed since your version. Overwrite? This will overwrite any customizations you made to this file?" Y; then
@@ -395,11 +386,12 @@ update() {
             docker-compose down
         fi
 
+        docker volume rm azuracast_www_vendor
         docker volume rm azuracast_tmp_data
         docker volume rm azuracast_redis_data
 
+        docker-compose run --rm --user="azuracast" web azuracast_update "$@"
         docker-compose up -d
-        docker-compose exec --user="azuracast" web azuracast_update "$@"
 
         docker rmi "$(docker images | grep "none" | awk '/ / { print $3 }')" 2>/dev/null
 
@@ -425,7 +417,7 @@ update-self() {
 # Usage: ./docker.sh cli [command]
 #
 cli() {
-    docker-compose exec --user="azuracast" web azuracast_cli "$@"
+    docker-compose run --rm --user="azuracast" web azuracast_cli "$@"
     exit
 }
 
@@ -480,6 +472,10 @@ restore() {
     if ask "Restoring will remove any existing AzuraCast installation data, replacing it with your backup. Continue?" Y; then
         docker-compose down -v
         docker-compose pull
+
+        # Run the web task to allow for a full system spin-up
+        docker-compose run --rm --user=azuracast web azuracast_cli cache:clear
+
         docker-compose up -d web
         docker cp "${BACKUP_PATH}" "azuracast_web:tmp/cli_backup.${BACKUP_EXT}"
         MSYS_NO_PATHCONV=1 docker exec --user="azuracast" azuracast_web azuracast_restore "/tmp/cli_backup.${BACKUP_EXT}" "$@"
@@ -497,25 +493,25 @@ restore() {
 # ./docker.sh restore [/custom/backup/dir/custombackupname.tar.gz]
 #
 restore-legacy() {
+    local APP_BASE_DIR BACKUP_PATH BACKUP_DIR BACKUP_FILENAME
+
     APP_BASE_DIR=$(pwd)
 
     BACKUP_PATH=${1:-"./backup.tar.gz"}
     BACKUP_DIR=$(cd "$(dirname "$BACKUP_PATH")" && pwd)
     BACKUP_FILENAME=$(basename "$BACKUP_PATH")
 
-    cd "$APP_BASE_DIR"
+    cd "$APP_BASE_DIR" || exit
 
     if [ -f "$BACKUP_PATH" ]; then
         docker-compose down
 
-        docker volume rm azuracast_db_data azuracast_influx_data azuracast_station_data
+        docker volume rm azuracast_db_data azuracast_station_data
         docker volume create azuracast_db_data
-        docker volume create azuracast_influx_data
         docker volume create azuracast_station_data
 
         docker run --rm -v "$BACKUP_DIR:/backup" \
             -v azuracast_db_data:/azuracast/db \
-            -v azuracast_influx_data:/azuracast/influx \
             -v azuracast_station_data:/azuracast/stations \
             busybox tar zxvf "/backup/$BACKUP_FILENAME"
 
@@ -534,7 +530,7 @@ restore-legacy() {
 # Usage: ./docker.sh static [static_container_command]
 #
 static() {
-    cd frontend
+    cd frontend || exit
     docker-compose build
     docker-compose run --rm frontend "$@"
     exit

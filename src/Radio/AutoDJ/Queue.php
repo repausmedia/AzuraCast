@@ -20,8 +20,6 @@ class Queue implements EventSubscriberInterface
 
     protected Entity\Repository\StationPlaylistMediaRepository $spmRepo;
 
-    protected Entity\Repository\SongRepository $songRepo;
-
     protected Entity\Repository\StationRequestRepository $requestRepo;
 
     protected Entity\Repository\SongHistoryRepository $historyRepo;
@@ -31,7 +29,6 @@ class Queue implements EventSubscriberInterface
         LoggerInterface $logger,
         Scheduler $scheduler,
         Entity\Repository\StationPlaylistMediaRepository $spmRepo,
-        Entity\Repository\SongRepository $songRepo,
         Entity\Repository\StationRequestRepository $requestRepo,
         Entity\Repository\SongHistoryRepository $historyRepo
     ) {
@@ -39,7 +36,6 @@ class Queue implements EventSubscriberInterface
         $this->logger = $logger;
         $this->scheduler = $scheduler;
         $this->spmRepo = $spmRepo;
-        $this->songRepo = $songRepo;
         $this->requestRepo = $requestRepo;
         $this->historyRepo = $historyRepo;
     }
@@ -66,7 +62,7 @@ class Queue implements EventSubscriberInterface
         $station = $event->getStation();
         $now = $event->getNow();
 
-        $song_history_count = 15;
+        $oncePerXSongHistoryCount = 15;
 
         // Pull all active, non-empty playlists and sort by type.
         $has_any_valid_playlists = false;
@@ -78,7 +74,7 @@ class Queue implements EventSubscriberInterface
                 $type = $playlist->getType();
 
                 if (Entity\StationPlaylist::TYPE_ONCE_PER_X_SONGS === $type) {
-                    $song_history_count = max($song_history_count, $playlist->getPlayPerSongs());
+                    $oncePerXSongHistoryCount = max($oncePerXSongHistoryCount, $playlist->getPlayPerSongs());
                 }
 
                 $subType = ($playlist->getScheduleItems()->count() > 0) ? 'scheduled' : 'unscheduled';
@@ -91,18 +87,34 @@ class Queue implements EventSubscriberInterface
             return;
         }
 
-        // Pull all recent cued songs for easy referencing below.
-        $cued_song_history = $this->historyRepo->getRecentlyPlayed(
+        $recentSongHistoryForOncePerXSongs = $this->historyRepo->getRecentlyPlayed(
             $station,
             $now,
-            $song_history_count
+            $oncePerXSongHistoryCount
         );
 
-        $logSongHistory = [];
-        foreach ($cued_song_history as $row) {
-            $logSongHistory[] = [
-                'song' => $row['song']['text'],
-                'cued_at' => (string)(CarbonImmutable::createFromTimestamp($row['timestamp_cued'],
+        $recentSongHistoryForDuplicatePrevention = $this->historyRepo->getRecentlyPlayedByTimeRange(
+            $station,
+            $now,
+            $station->getBackendConfig()->getDuplicatePreventionTimeRange()
+        );
+
+        $logOncePerXSongsSongHistory = [];
+        foreach ($recentSongHistoryForOncePerXSongs as $row) {
+            $logOncePerXSongsSongHistory[] = [
+                'song' => $row['text'],
+                'cued_at' => (string)(CarbonImmutable::createFromTimestamp($row['timestamp_cued'] ?? $row['timestamp_start'],
+                    $now->getTimezone())),
+                'duration' => $row['duration'],
+                'sent_to_autodj' => $row['sent_to_autodj'],
+            ];
+        }
+
+        $logDuplicatePreventionSongHistory = [];
+        foreach ($recentSongHistoryForDuplicatePrevention as $row) {
+            $logDuplicatePreventionSongHistory[] = [
+                'song' => $row['text'],
+                'cued_at' => (string)(CarbonImmutable::createFromTimestamp($row['timestamp_cued'] ?? $row['timestamp_start'],
                     $now->getTimezone())),
                 'duration' => $row['duration'],
                 'sent_to_autodj' => $row['sent_to_autodj'],
@@ -110,7 +122,8 @@ class Queue implements EventSubscriberInterface
         }
 
         $this->logger->debug('AutoDJ recent song playback history', [
-            'history' => $logSongHistory,
+            'history_once_per_x_songs' => $logOncePerXSongsSongHistory,
+            'history_duplicate_prevention' => $logDuplicatePreventionSongHistory,
         ]);
 
         // Types of playlists that should play, sorted by priority.
@@ -134,7 +147,7 @@ class Queue implements EventSubscriberInterface
             $eligible_playlists = [];
             foreach ($playlists_by_type[$type] as $playlist_id => $playlist) {
                 /** @var Entity\StationPlaylist $playlist */
-                if ($this->scheduler->shouldPlaylistPlayNow($playlist, $now, $cued_song_history)) {
+                if ($this->scheduler->shouldPlaylistPlayNow($playlist, $now, $recentSongHistoryForOncePerXSongs)) {
                     $eligible_playlists[$playlist_id] = $playlist->getWeight();
                     $log_playlists[] = [
                         'id' => $playlist->getId(),
@@ -165,7 +178,7 @@ class Queue implements EventSubscriberInterface
 
                     if ($event->setNextSong($this->playSongFromPlaylist(
                         $playlist,
-                        $cued_song_history,
+                        $recentSongHistoryForDuplicatePrevention,
                         $now,
                         $allowDuplicates
                     ))) {
@@ -228,13 +241,13 @@ class Queue implements EventSubscriberInterface
             $this->em->persist($playlist);
 
             $spm = $media_to_play->getItemForPlaylist($playlist);
-            if ($spm instanceof Entity\StationPlaylist) {
+            if ($spm instanceof Entity\StationPlaylistMedia) {
                 $spm->played($now->getTimestamp());
                 $this->em->persist($spm);
             }
 
             // Log in history
-            $sh = new Entity\StationQueue($playlist->getStation(), $media_to_play->getSong());
+            $sh = new Entity\StationQueue($playlist->getStation(), $media_to_play);
             $sh->setPlaylist($playlist);
             $sh->setMedia($media_to_play);
             $sh->setTimestampCued($now->getTimestamp());
@@ -251,9 +264,10 @@ class Queue implements EventSubscriberInterface
             $playlist->setPlayedAt($now->getTimestamp());
             $this->em->persist($playlist);
 
-            $sh = new Entity\StationQueue($playlist->getStation(), $this->songRepo->getOrCreate([
-                'text' => 'Remote Playlist URL',
-            ]));
+            $sh = new Entity\StationQueue(
+                $playlist->getStation(),
+                Entity\Song::createFromText('Remote Playlist URL')
+            );
 
             $sh->setPlaylist($playlist);
             $sh->setAutodjCustomUri($media_uri);
@@ -288,7 +302,12 @@ class Queue implements EventSubscriberInterface
         switch ($playlist->getOrder()) {
             case Entity\StationPlaylist::ORDER_RANDOM:
                 $mediaQueue = $this->spmRepo->getPlayableMedia($playlist);
-                $mediaId = $this->preventDuplicates($mediaQueue, $recentSongHistory, $allowDuplicates);
+
+                if ($playlist->getAvoidDuplicates()) {
+                    $mediaId = $this->preventDuplicates($mediaQueue, $recentSongHistory, $allowDuplicates);
+                } else {
+                    $mediaId = array_key_first($mediaQueue);
+                }
                 break;
 
             case Entity\StationPlaylist::ORDER_SEQUENTIAL:
@@ -307,16 +326,9 @@ class Queue implements EventSubscriberInterface
 
             case Entity\StationPlaylist::ORDER_SHUFFLE:
             default:
-                $media_queue_cached = $playlist->getQueue();
-
-                if (empty($media_queue_cached)) {
+                $mediaQueue = $playlist->getQueue();
+                if (empty($mediaQueue)) {
                     $mediaQueue = $this->spmRepo->getPlayableMedia($playlist);
-                } else {
-                    // Rekey the media queue because redis won't always properly store keys.
-                    $mediaQueue = [];
-                    foreach ($media_queue_cached as $media) {
-                        $mediaQueue[$media['id']] = $media;
-                    }
                 }
 
                 if ($playlist->getAvoidDuplicates()) {
@@ -418,14 +430,14 @@ class Queue implements EventSubscriberInterface
 
         foreach ($playedMedia as $history) {
             $playedTracks[] = [
-                'artist' => $history['song']['artist'],
-                'title' => $history['song']['title'],
+                'artist' => $history['artist'],
+                'title' => $history['title'],
             ];
 
-            $songId = $history['song']['id'];
+            $songId = $history['song_id'];
 
             if (!isset($latestSongIdsPlayed[$songId])) {
-                $latestSongIdsPlayed[$songId] = $history['timestamp_cued'];
+                $latestSongIdsPlayed[$songId] = $history['timestamp_cued'] ?? $history['timestamp_start'];
             }
         }
 
@@ -438,8 +450,8 @@ class Queue implements EventSubscriberInterface
             }
 
             $eligibleTracks[$media['id']] = [
-                'artist' => $media['song']['artist'],
-                'title' => $media['song']['title'],
+                'artist' => $media['artist'],
+                'title' => $media['title'],
             ];
         }
 
@@ -493,7 +505,7 @@ class Queue implements EventSubscriberInterface
         $this->logger->debug(sprintf('Queueing next song from request ID %d.', $request->getId()));
 
         // Log in history
-        $sq = new Entity\StationQueue($request->getStation(), $request->getTrack()->getSong());
+        $sq = new Entity\StationQueue($request->getStation(), $request->getTrack());
         $sq->setRequest($request);
         $sq->setMedia($request->getTrack());
 

@@ -69,8 +69,7 @@ class AutoDJ
         $now = $this->getNowFromCurrentSong($station);
 
         $this->logger->debug('Adjusting now based on duration of most recently cued song.', [
-            'song' => $queueRow->getSong()
-                ->getText(),
+            'song' => $queueRow->getText(),
             'cued' => (string)$now,
             'duration' => $duration,
         ]);
@@ -80,7 +79,7 @@ class AutoDJ
         $event = new AnnotateNextSong($queueRow, $asAutoDj);
         $this->dispatcher->dispatch($event);
 
-        $this->buildQueueFromNow($station, $now);
+        $this->buildQueueFromNow($station, $now, true);
 
         $this->logger->popProcessor();
 
@@ -99,7 +98,7 @@ class AutoDJ
 
         $now = $this->getNowFromCurrentSong($station);
 
-        $this->buildQueueFromNow($station, $now);
+        $this->buildQueueFromNow($station, $now, false);
 
         $this->logger->popProcessor();
     }
@@ -111,7 +110,7 @@ class AutoDJ
 
         $now = $now->addSeconds($duration);
         return ($duration >= $startNext)
-            ? $now->subMilliseconds($startNext * 1000)
+            ? $now->subMilliseconds((int)($startNext * 1000))
             : $now;
     }
 
@@ -133,8 +132,7 @@ class AutoDJ
 
         $this->logger->debug('Got currently playing song. Using start time and duration for initial value of now.',
             [
-                'song' => $currentSong->getSong()
-                    ->getText(),
+                'song' => $currentSong->getText(),
                 'started' => (string)$started,
                 'duration' => $currentSongDuration,
             ]);
@@ -143,27 +141,33 @@ class AutoDJ
         return max($now, $adjustedNow);
     }
 
-    protected function buildQueueFromNow(Entity\Station $station, CarbonInterface $now): CarbonInterface
-    {
+    protected function buildQueueFromNow(
+        Entity\Station $station,
+        CarbonInterface $now,
+        bool $resetTimestampCued
+    ): CarbonInterface {
         // Adjust "now" time from current queue.
         $backendOptions = $station->getBackendConfig();
         $maxQueueLength = $backendOptions->getAutoDjQueueLength();
+        $stationTz = $station->getTimezoneObject();
 
         $upcomingQueue = $this->queueRepo->getUpcomingQueue($station);
         $queueLength = count($upcomingQueue);
 
+        /*
+         * Calculate now from the end of the queue if the queue has items.
+         * This assumes that the queue should always be full if a new row is added every time a row is removed.
+         * If the queue is empty, then we fall back to the value of now passed in by the caller, which may bor may not be accurate but is the best we have.
+         */
         foreach ($upcomingQueue as $queueRow) {
-            $playlist = $queueRow->getPlaylist();
-            if (!$this->scheduler->isPlaylistScheduledToPlayNow($playlist, $now)) {
-                $this->logger->warning('Queue item is no longer scheduled to play right now; removing.');
-                $this->em->remove($queueRow);
-            } else {
-                $duration = $queueRow->getDuration() ?? 1;
-                $now = $this->getAdjustedNow($station, $now, $duration);
+            if ($resetTimestampCued === true) {
+                $queueRow->setTimestampCued($now->getTimestamp());
             }
-        }
 
-        $this->em->flush();
+            $timestampCued = CarbonImmutable::createFromTimestamp($queueRow->getTimestampCued(), $stationTz);
+            $duration = $queueRow->getDuration() ?? 1;
+            $now = $this->getAdjustedNow($station, $timestampCued, $duration);
+        }
 
         if ($queueLength >= $maxQueueLength) {
             $this->logger->debug('AutoDJ queue is already at current max length (' . $maxQueueLength . ').');

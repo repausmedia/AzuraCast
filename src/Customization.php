@@ -11,7 +11,6 @@ use Psr\Http\Message\ServerRequestInterface as Request;
 
 class Customization
 {
-    public const DEFAULT_TIMEZONE = 'UTC';
     public const DEFAULT_LOCALE = 'en_US.UTF-8';
     public const DEFAULT_THEME = 'light';
 
@@ -34,10 +33,10 @@ class Customization
         $this->settingsRepo = $settingsRepo;
         $this->instanceName = (string)$this->settingsRepo->getSetting(Entity\Settings::INSTANCE_NAME, '');
 
-        $this->locale = $this->initLocale($request);
-
         // Register current user
         $this->user = $request->getAttribute(ServerRequest::ATTR_USER);
+
+        $this->locale = $this->initLocale($request);
 
         // Register current theme
         $queryParams = $request->getQueryParams();
@@ -65,7 +64,6 @@ class Customization
         $translator->register();
 
         // Register translation superglobal functions
-        putenv('LANG=' . $this->locale);
         setlocale(LC_ALL, $this->locale);
     }
 
@@ -79,9 +77,6 @@ class Customization
     protected function initLocale(?Request $request = null): string
     {
         $settings = Settings::getInstance();
-        if ($settings->isTesting()) {
-            return self::DEFAULT_LOCALE;
-        }
 
         $supported_locales = $settings['locale']['supported'];
         $try_locales = [];

@@ -1,16 +1,19 @@
 <?php
-namespace App\Console\Command;
+namespace App\Console\Command\Locale;
 
+use App\Console\Command\CommandAbstract;
 use App\Settings;
 use Gettext\Translations;
 use Symfony\Component\Console\Style\SymfonyStyle;
 
-class LocaleImportCommand extends CommandAbstract
+class ImportCommand extends CommandAbstract
 {
     public function __invoke(
         SymfonyStyle $io,
         Settings $settings
     ) {
+        $io->title('Import Locales');
+
         $locales = $settings['locale']['supported'];
         $locale_base = $settings[Settings::BASE_DIR] . '/resources/locale';
 
@@ -28,7 +31,7 @@ class LocaleImportCommand extends CommandAbstract
             }
         }
 
-        $io->writeln(__('Locales imported.'));
+        $io->success('Locales imported.');
         return 0;
     }
 }

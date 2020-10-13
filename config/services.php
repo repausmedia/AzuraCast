@@ -3,6 +3,7 @@
  * PHP-DI Services
  */
 
+use App\Event;
 use App\Settings;
 use Psr\Container\ContainerInterface;
 
@@ -58,7 +59,8 @@ return [
         Doctrine\Common\Annotations\Reader $reader,
         App\Settings $settings,
         App\Doctrine\Event\StationRequiresRestart $eventRequiresRestart,
-        App\Doctrine\Event\AuditLog $eventAuditLog
+        App\Doctrine\Event\AuditLog $eventAuditLog,
+        App\EventDispatcher $dispatcher
     ) {
         $connectionOptions = [
             'host' => $_ENV['MYSQL_HOST'] ?? 'mariadb',
@@ -95,9 +97,19 @@ return [
                 $doctrineCache
             );
 
+            $mappingClassesPaths = [$settings->getBaseDirectory() . '/src/Entity'];
+
+            $buildDoctrineMappingPathsEvent = new Event\BuildDoctrineMappingPaths(
+                $mappingClassesPaths,
+                $settings->getBaseDirectory()
+            );
+            $dispatcher->dispatch($buildDoctrineMappingPathsEvent);
+
+            $mappingClassesPaths = $buildDoctrineMappingPathsEvent->getMappingClassesPaths();
+
             $annotationDriver = new Doctrine\ORM\Mapping\Driver\AnnotationDriver(
                 $reader,
-                [$settings->getBaseDirectory() . '/src/Entity']
+                $mappingClassesPaths
             );
             $config->setMetadataDriverImpl($annotationDriver);
 
@@ -105,6 +117,10 @@ return [
             // $config->setSQLLogger(new Doctrine\DBAL\Logging\EchoSQLLogger);
 
             $config->addCustomNumericFunction('RAND', DoctrineExtensions\Query\Mysql\Rand::class);
+
+            if (!Doctrine\DBAL\Types\Type::hasType('carbon_immutable')) {
+                Doctrine\DBAL\Types\Type::addType('carbon_immutable', Carbon\Doctrine\CarbonImmutableType::class);
+            }
 
             $eventManager = new Doctrine\Common\EventManager;
             $eventManager->addEventSubscriber($eventRequiresRestart);
@@ -197,15 +213,35 @@ return [
     // Monolog Logger
     Monolog\Logger::class => function (App\Settings $settings) {
         $logger = new Monolog\Logger($settings[App\Settings::APP_NAME] ?? 'app');
-        $logging_level = $settings->isProduction() ? Psr\Log\LogLevel::INFO : Psr\Log\LogLevel::DEBUG;
+
+        $loggingLevel = null;
+        if (!empty($_ENV['LOG_LEVEL'])) {
+            $allowedLogLevels = [
+                Psr\Log\LogLevel::DEBUG,
+                Psr\Log\LogLevel::INFO,
+                Psr\Log\LogLevel::NOTICE,
+                Psr\Log\LogLevel::WARNING,
+                Psr\Log\LogLevel::ERROR,
+                Psr\Log\LogLevel::CRITICAL,
+                Psr\Log\LogLevel::ALERT,
+                Psr\Log\LogLevel::EMERGENCY,
+            ];
+
+            $loggingLevel = strtolower($_ENV['LOG_LEVEL']);
+            if (!in_array($loggingLevel, $allowedLogLevels, true)) {
+                $loggingLevel = null;
+            }
+        }
+
+        $loggingLevel ??= $settings->isProduction() ? Psr\Log\LogLevel::NOTICE : Psr\Log\LogLevel::DEBUG;
 
         if ($settings[App\Settings::IS_DOCKER] || $settings[App\Settings::IS_CLI]) {
-            $log_stderr = new Monolog\Handler\StreamHandler('php://stderr', $logging_level, true);
+            $log_stderr = new Monolog\Handler\StreamHandler('php://stderr', $loggingLevel, true);
             $logger->pushHandler($log_stderr);
         }
 
         $log_file = new Monolog\Handler\StreamHandler($settings[App\Settings::TEMP_DIR] . '/app.log',
-            $logging_level, true);
+            $loggingLevel, true);
         $logger->pushHandler($log_file);
 
         return $logger;
@@ -258,38 +294,29 @@ return [
         return $builder->getValidator();
     },
 
-    Symfony\Component\Messenger\Bridge\Doctrine\Transport\DoctrineTransport::class => function (
-        Doctrine\DBAL\Connection $db,
-        Symfony\Component\Serializer\Serializer $serializer
+    Symfony\Component\Lock\LockFactory::class => function (
+        Redis $redis,
+        Psr\Log\LoggerInterface $logger
     ) {
-        $doctrineConnection = new Symfony\Component\Messenger\Bridge\Doctrine\Transport\Connection(
-            [
-                'table_name' => 'messenger_messages',
-                'auto_setup' => false,
-            ],
-            $db
-        );
+        $redisStore = new Symfony\Component\Lock\Store\RedisStore($redis);
 
-        return new Symfony\Component\Messenger\Bridge\Doctrine\Transport\DoctrineTransport(
-            $doctrineConnection,
-            new Symfony\Component\Messenger\Transport\Serialization\PhpSerializer
-        );
+        $retryStore = new Symfony\Component\Lock\Store\RetryTillSaveStore($redisStore, 1000, 30);
+        $retryStore->setLogger($logger);
+
+        $lockFactory = new Symfony\Component\Lock\LockFactory($retryStore);
+        $lockFactory->setLogger($logger);
+
+        return $lockFactory;
     },
 
     Symfony\Component\Messenger\MessageBus::class => function (
-        ContainerInterface $di,
-        Monolog\Logger $logger
+        App\MessageQueue\QueueManager $queueManager,
+        Symfony\Component\Lock\LockFactory $lockFactory,
+        Monolog\Logger $logger,
+        ContainerInterface $di
     ) {
         // Configure message sending middleware
-        $senders = [
-            App\Message\AbstractMessage::class => [
-                Symfony\Component\Messenger\Bridge\Doctrine\Transport\DoctrineTransport::class,
-            ],
-        ];
-
-        $sendersLocator = new Symfony\Component\Messenger\Transport\Sender\SendersLocator($senders, $di);
-
-        $sendMessageMiddleware = new Symfony\Component\Messenger\Middleware\SendMessageMiddleware($sendersLocator);
+        $sendMessageMiddleware = new Symfony\Component\Messenger\Middleware\SendMessageMiddleware($queueManager);
         $sendMessageMiddleware->setLogger($logger);
 
         // Configure message handling middleware
@@ -311,22 +338,15 @@ return [
         );
         $handleMessageMiddleware->setLogger($logger);
 
+        // Add unique protection middleware
+        $uniqueMiddleware = new App\MessageQueue\HandleUniqueMiddleware($lockFactory);
+
         // Compile finished message bus.
         return new Symfony\Component\Messenger\MessageBus([
             $sendMessageMiddleware,
+            $uniqueMiddleware,
             $handleMessageMiddleware,
         ]);
-    },
-
-    // InfluxDB
-    InfluxDB\Database::class => function (Settings $settings) {
-        $opts = [
-            'host' => $settings->isDocker() ? 'influxdb' : 'localhost',
-            'port' => 8086,
-        ];
-
-        $influx = new InfluxDB\Client($opts['host'], $opts['port']);
-        return $influx->selectDB('stations');
     },
 
     // Supervisor manager
@@ -349,11 +369,15 @@ return [
     },
 
     // NowPlaying Adapter factory
-    NowPlaying\Adapter\AdapterFactory::class => function (GuzzleHttp\Client $httpClient) {
+    NowPlaying\Adapter\AdapterFactory::class => function (
+        GuzzleHttp\Client $httpClient,
+        Psr\Log\LoggerInterface $logger
+    ) {
         return new NowPlaying\Adapter\AdapterFactory(
             new Http\Factory\Guzzle\UriFactory,
             new Http\Factory\Guzzle\RequestFactory,
-            $httpClient
+            $httpClient,
+            $logger
         );
     },
 
@@ -377,54 +401,45 @@ return [
     },
 
     // Synchronized (Cron) Tasks
-    App\Sync\Runner::class => function (
-        ContainerInterface $di,
-        Monolog\Logger $logger,
-        App\Lock\LockManager $lockManager,
-        App\Entity\Repository\SettingsRepository $settingsRepo
-    ) {
-        return new App\Sync\Runner(
-            $settingsRepo,
-            $logger,
-            $lockManager,
-            [ // Every 15 seconds tasks
-                $di->get(App\Sync\Task\BuildQueue::class),
-                $di->get(App\Sync\Task\NowPlaying::class),
-                $di->get(App\Sync\Task\ReactivateStreamer::class),
+    App\Sync\TaskLocator::class => function (ContainerInterface $di) {
+        return new App\Sync\TaskLocator($di, [
+            App\Event\GetSyncTasks::SYNC_NOWPLAYING => [
+                App\Sync\Task\BuildQueue::class,
+                App\Sync\Task\NowPlaying::class,
+                App\Sync\Task\ReactivateStreamer::class,
             ],
-            [ // Every minute tasks
-                $di->get(App\Sync\Task\RadioRequests::class),
-                $di->get(App\Sync\Task\Backup::class),
-                $di->get(App\Sync\Task\RelayCleanup::class),
+            App\Event\GetSyncTasks::SYNC_SHORT => [
+                App\Sync\Task\RadioRequests::class,
+                App\Sync\Task\Backup::class,
+                App\Sync\Task\RelayCleanup::class,
             ],
-            [ // Every 5 minutes tasks
-                $di->get(App\Sync\Task\Media::class),
-                $di->get(App\Sync\Task\FolderPlaylists::class),
-                $di->get(App\Sync\Task\CheckForUpdates::class),
+            App\Event\GetSyncTasks::SYNC_MEDIUM => [
+                App\Sync\Task\Media::class,
+                App\Sync\Task\FolderPlaylists::class,
+                App\Sync\Task\CheckForUpdates::class,
             ],
-            [ // Every hour tasks
-                $di->get(App\Sync\Task\Analytics::class),
-                $di->get(App\Sync\Task\RadioAutomation::class),
-                $di->get(App\Sync\Task\HistoryCleanup::class),
-                $di->get(App\Sync\Task\RotateLogs::class),
-                $di->get(App\Sync\Task\UpdateGeoLiteDatabase::class),
-            ]
-        );
+            App\Event\GetSyncTasks::SYNC_LONG => [
+                App\Sync\Task\Analytics::class,
+                App\Sync\Task\RadioAutomation::class,
+                App\Sync\Task\HistoryCleanup::class,
+                App\Sync\Task\StorageCleanupTask::class,
+                App\Sync\Task\RotateLogs::class,
+                App\Sync\Task\UpdateGeoLiteDatabase::class,
+            ],
+        ]);
     },
 
     // Web Hooks
-    App\Webhook\Dispatcher::class => function (
+    App\Webhook\ConnectorLocator::class => function (
         ContainerInterface $di,
-        App\Config $config,
-        Monolog\Logger $logger,
-        App\ApiUtilities $apiUtils
+        App\Config $config
     ) {
         $webhooks = $config->get('webhooks');
         $services = [];
         foreach ($webhooks['webhooks'] as $webhook_key => $webhook_info) {
-            $services[$webhook_key] = $di->get($webhook_info['class']);
+            $services[$webhook_key] = $webhook_info['class'];
         }
 
-        return new App\Webhook\Dispatcher($logger, $apiUtils, $services);
+        return new App\Webhook\ConnectorLocator($di, $services);
     },
 ];
